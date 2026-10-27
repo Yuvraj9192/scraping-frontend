@@ -347,3 +347,33 @@ a:hover {
 .pagination-controls span {
   font-size: 14px;
 }
+
+
+.website-tracking-section {
+  margin-top: 28px;
+  padding: 24px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.website-tracking-section h2 {
+  margin-top: 0;
+}
+
+.website-tracking-section label {
+  display: block;
+  margin: 16px 0 8px;
+  font-weight: 600;
+}
+
+.website-tracking-section select {
+  display: block;
+  width: 100%;
+  max-width: 600px;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1e293b;
+}

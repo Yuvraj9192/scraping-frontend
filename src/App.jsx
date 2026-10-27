@@ -1,24 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
-
-const API_URL = import.meta.env.VITE_API_BASE_URL;
-
-const DEFAULT_FILTERS = {
-  city: "Panchkula",
-  category: "all",
-  website: "missing",
-};
-
-function Status({ value, fallback = "Not started" }) {
-  const status = value || fallback;
-  const className = status.toLowerCase().replace(/[\s_]+/g, "-");
-
-  return (
-    <span className={`status status-${className}`}>
-      {status.replace(/_/g, " ")}
-    </span>
-  );
-}
+import { DEFAULT_FILTERS, PAGE_SIZE } from "./constants/business";
+import { getBusinesses, getCategories, discoverBusinesses } from "./services/businessApi";
+import DashboardHeader from "./components/DashboardHeader";
+import SummaryCard from "./components/SummaryCard";
+import FiltersPanel from "./components/FiltersPanel";
+import BusinessSection from "./components/BusinessSection";
 
 export default function App() {
   const [businesses, setBusinesses] = useState([]);
@@ -34,146 +21,83 @@ export default function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [total, setTotal] = useState(0);
-
-  // Pagination
   const [page, setPage] = useState(1);
-  const [limit] = useState(50);
   const [totalPages, setTotalPages] = useState(0);
 
+  const currentFilters = () => ({ city, category, website });
 
+  const fetchBusinesses = useCallback(async (
+    searchTerm = "",
+    filters = DEFAULT_FILTERS,
+    pageNumber = 1
+  ) => {
+    try {
+      setLoading(true);
+      setError("");
+      const data = await getBusinesses(searchTerm, filters, pageNumber);
+      setBusinesses(data.businesses || []);
+      setTotal(data.total || 0);
+      setTotalPages(data.totalPages || 0);
+    } catch (err) {
+      setError(
+        err.message || "Failed to load businesses. Check the backend connection."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const currentFilters = () => ({
-    city,
-    category,
-    website,
-  });
-
-  // Load the existing category array from the backend.
   useEffect(() => {
     let cancelled = false;
 
     async function loadCategories() {
       try {
-        const response = await fetch(`${API_URL}/businesses/categories`);
-        const data = await response.json();
-
-        if (!response.ok || !data.success) {
-          throw new Error(data.message || "Failed to load categories.");
-        }
-
-        if (!cancelled) {
-          setCategories(data.categories || []);
-        }
+        const items = await getCategories();
+        if (!cancelled) setCategories(items);
       } catch (err) {
-        if (!cancelled) {
-          setError(err.message || "Failed to load categories.");
-        }
+        if (!cancelled) setError(err.message || "Failed to load categories.");
       } finally {
-        if (!cancelled) {
-          setCategoriesLoading(false);
-        }
+        if (!cancelled) setCategoriesLoading(false);
       }
     }
 
     loadCategories();
-
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Load stored businesses. This endpoint does not trigger discovery.
-
-  const fetchBusinesses = useCallback(
-    async (
-      searchTerm = "",
-      filters = DEFAULT_FILTERS,
-      pageNumber = 1
-    ) => {
-      try {
-        setLoading(true);
-        setError("");
-
-        const params = new URLSearchParams({
-          page: String(pageNumber),
-          limit: String(limit),
-        });
-
-        if (searchTerm.trim()) {
-          params.set("search", searchTerm.trim());
-        }
-
-        if (filters.city?.trim()) {
-          params.set("city", filters.city.trim());
-        }
-
-        // "all" means no category filter.
-        if (filters.category && filters.category !== "all") {
-          params.set("category", filters.category);
-        }
-
-        if (filters.website && filters.website !== "all") {
-          params.set("website", filters.website);
-        }
-
-        const response = await fetch(
-          `${API_URL}/businesses/db?${params.toString()}`
-        );
-
-        const data = await response.json();
-
-        if (!response.ok || !data.success) {
-          throw new Error(data.message || "Failed to load businesses.");
-        }
-
-        setBusinesses(data.businesses || []);
-        setTotal(data.total || 0);
-        setTotalPages(data.totalPages || 0);
-      } catch (err) {
-        setError(
-          err.message ||
-          "Failed to load businesses. Check the backend connection."
-        );
-      } finally {
-        setLoading(false);
-      }
-    },
-    [limit]
-  );
-
-
   useEffect(() => {
     fetchBusinesses(search, currentFilters(), page);
+    // currentFilters is intentionally created from the latest filter state.
+    // Filter changes are applied by the form; page changes reuse those filters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, fetchBusinesses]);
 
   function handleSearch(event) {
     event.preventDefault();
-    fetchBusinesses(search, currentFilters());
+    setPage(1);
+    fetchBusinesses(search, currentFilters(), 1);
   }
 
   function handleApplyFilters(event) {
     event.preventDefault();
     setNotice("");
-    fetchBusinesses(search, currentFilters());
+    setPage(1);
+    fetchBusinesses(search, currentFilters(), 1);
   }
 
   function handleClearFilters() {
-    const clearedFilters = {
-      city: "",
-      category: "all",
-      website: "all",
-    };
-
+    const clearedFilters = { city: "", category: "all", website: "all" };
     setCity(clearedFilters.city);
     setCategory(clearedFilters.category);
     setWebsite(clearedFilters.website);
     setSearch("");
+    setPage(1);
     setNotice("");
-
-    fetchBusinesses("", clearedFilters);
+    fetchBusinesses("", clearedFilters, 1);
   }
 
-  // Existing discovery endpoint returns CSV on success.
   async function handleDiscover() {
     if (!city.trim()) {
       setError("Enter a city before discovering businesses.");
@@ -184,39 +108,9 @@ export default function App() {
       setDiscovering(true);
       setError("");
       setNotice("");
-
-      const params = new URLSearchParams({
-        city: city.trim(),
-        category: category || "all",
-      });
-
-      const response = await fetch(
-        `${API_URL}/businesses?${params.toString()}`
-      );
-
-      if (!response.ok) {
-        const contentType = response.headers.get("content-type") || "";
-        let message = "Business discovery failed.";
-
-        if (contentType.includes("application/json")) {
-          const data = await response.json();
-          message = data.message || message;
-        } else {
-          const text = await response.text();
-          if (text) message = text;
-        }
-
-        throw new Error(message);
-      }
-
-      // Read the CSV response without trying to parse it as JSON.
-      await response.blob();
-
-      await fetchBusinesses(search, currentFilters());
-
-      setNotice(
-        "Discovery completed. Stored business results have been refreshed."
-      );
+      await discoverBusinesses(city, category);
+      await fetchBusinesses(search, currentFilters(), page);
+      setNotice("Discovery completed. Stored business results have been refreshed.");
     } catch (err) {
       setError(err.message || "Business discovery failed.");
     } finally {
@@ -224,271 +118,54 @@ export default function App() {
     }
   }
 
+  function handleClearSearch() {
+    setSearch("");
+    setPage(1);
+    fetchBusinesses("", currentFilters(), 1);
+  }
+
   return (
     <main className="dashboard">
-      <header className="dashboard-header">
-        <div>
-          <p className="eyebrow">BUSINESS DISCOVERY</p>
-          <h1>Business Dashboard</h1>
-          <p className="subtitle">
-            Discover businesses, search database records, and monitor
-            website research and audit reports.
-          </p>
-        </div>
+      <DashboardHeader
+        loading={loading}
+        discovering={discovering}
+        onRefresh={() => fetchBusinesses(search, currentFilters(), page)}
+      />
 
-        <button
-          className="refresh-button"
-          onClick={() => fetchBusinesses(search, currentFilters())}
-          disabled={loading || discovering}
-        >
-          {loading ? "Loading..." : "Refresh"}
-        </button>
-      </header>
+      <SummaryCard total={total} visibleCount={businesses.length} />
 
-      <section className="summary-card">
-        <div>
-          <p>Total matching businesses</p>
-          <h2>{total}</h2>
-        </div>
+      <FiltersPanel
+        city={city}
+        setCity={setCity}
+        categories={categories}
+        categoriesLoading={categoriesLoading}
+        category={category}
+        setCategory={setCategory}
+        website={website}
+        setWebsite={setWebsite}
+        loading={loading}
+        discovering={discovering}
+        onApply={handleApplyFilters}
+        onClear={handleClearFilters}
+        onDiscover={handleDiscover}
+      />
 
-        <div>
-          <p>Showing on this page</p>
-          <h2>{businesses.length}</h2>
-        </div>
-      </section>
-
-      <section className="filters-panel">
-        <h2>Discover and filter businesses</h2>
-
-        <form onSubmit={handleApplyFilters}>
-          <div className="filters-grid">
-            <label>
-              City
-              <input
-                value={city}
-                onChange={(event) => setCity(event.target.value)}
-                placeholder="e.g. Panchkula"
-              />
-            </label>
-
-            <label>
-              Category
-              <select
-                value={category}
-                onChange={(event) => setCategory(event.target.value)}
-                disabled={categoriesLoading}
-              >
-                <option value="all">All Categories</option>
-
-                {categories.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-              {categoriesLoading && <small>Loading categories...</small>}
-            </label>
-
-            <label>
-              Website status
-              <select
-                value={website}
-                onChange={(event) => setWebsite(event.target.value)}
-              >
-                <option value="all">All businesses</option>
-                <option value="missing">Website missing</option>
-                <option value="existing">Website available</option>
-              </select>
-            </label>
-          </div>
-
-          <div className="filter-actions">
-            <button type="submit" disabled={loading || discovering}>
-              Apply Filters
-            </button>
-
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={handleClearFilters}
-              disabled={loading || discovering}
-            >
-              Clear Filters
-            </button>
-
-            <button
-              type="button"
-              className="discover-button"
-              onClick={handleDiscover}
-              disabled={loading || discovering}
-            >
-              {discovering
-                ? "Discovering..."
-                : "Discover More Businesses"}
-            </button>
-          </div>
-        </form>
-
-        <p className="footer-note">
-          Apply Filters searches stored database records. Discover More
-          Businesses runs your existing discovery service for the selected
-          city and category.
-        </p>
-      </section>
-
-      <section className="business-section">
-        <h2>Stored businesses</h2>
-
-        <form className="search-form" onSubmit={handleSearch}>
-          <input
-            type="search"
-            placeholder="Search company, city, category, phone..."
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-
-          <button type="submit" disabled={loading}>
-            Search
-          </button>
-
-          <button
-            type="button"
-            className="clear-button"
-            onClick={() => {
-              setSearch("");
-              fetchBusinesses("", currentFilters());
-            }}
-            disabled={loading}
-          >
-            Clear Search
-          </button>
-        </form>
-
-        {notice && <p className="success-message">{notice}</p>}
-        {error && <p className="error-message">{error}</p>}
-
-        {loading ? (
-          <p className="message">Loading businesses...</p>
-        ) : businesses.length === 0 ? (
-          <p className="message">No businesses found for these filters.</p>
-        ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Business</th>
-                  <th>City</th>
-                  <th>Category</th>
-                  <th>Website</th>
-                  <th>Research</th>
-                  <th>Report</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {businesses.map((business) => {
-                  const research = business.agentResearches?.[0];
-                  const report = business.reports?.[0];
-
-                  return (
-                    <tr key={business.id}>
-                      <td>
-                        <strong>{business.name}</strong>
-                        <small>{business.phone || "No phone"}</small>
-                      </td>
-
-                      <td>{business.city || "—"}</td>
-                      <td>{business.category || "—"}</td>
-
-                      <td>
-                        {business.website ? (
-                          <a
-                            href={business.website}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Visit website
-                          </a>
-                        ) : (
-                          <Status value="Missing" />
-                        )}
-                      </td>
-
-                      <td>
-                        <Status
-                          value={research?.status}
-                          fallback="Not started"
-                        />
-
-                        {research?.websiteExists === true && (
-                          <small>Website found by research</small>
-                        )}
-
-                        {research?.websiteExists === false && (
-                          <small>No website found by research</small>
-                        )}
-                      </td>
-
-                      <td>
-                        {report ? (
-                          <>
-                            <Status value={report.status} />
-
-                            {report.pdfUrl && (
-                              <a
-                                className="pdf-link"
-                                href={report.pdfUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                View PDF
-                              </a>
-                            )}
-                          </>
-                        ) : (
-                          <Status value="Not generated" />
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {/* Pagination */}
-            <div className="pagination">
-              <p>
-                Showing {total === 0 ? 0 : (page - 1) * limit + 1}–
-                {Math.min(page * limit, total)} of {total} companies
-              </p>
-
-              <div className="pagination-controls">
-                <button
-                  onClick={() => setPage((prev) => prev - 1)}
-                  disabled={page <= 1 || loading}
-                >
-                  Previous
-                </button>
-
-                <span>
-                  Page {page} of {Math.max(totalPages, 1)}
-                </span>
-
-                <button
-                  onClick={() => setPage((prev) => prev + 1)}
-                  disabled={page >= totalPages || loading}
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <p className="footer-note">
-          Showing up to 50 businesses, with the latest research and report
-          record for each business.
-        </p>
-      </section>
+      <BusinessSection
+        search={search}
+        setSearch={setSearch}
+        loading={loading}
+        businesses={businesses}
+        notice={notice}
+        error={error}
+        onSearch={handleSearch}
+        onClearSearch={handleClearSearch}
+        page={page}
+        limit={PAGE_SIZE}
+        total={total}
+        totalPages={totalPages}
+        onPrevious={() => setPage((previous) => Math.max(1, previous - 1))}
+        onNext={() => setPage((previous) => Math.min(totalPages, previous + 1))}
+      />
     </main>
   );
 }
